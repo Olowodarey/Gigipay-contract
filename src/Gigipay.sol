@@ -77,20 +77,6 @@ contract Gigipay is
     }
 
     /**
-     * @dev Gas-optimized keccak256 hashing using assembly
-     * @param _claimCode The claim code to hash
-     * @return result The keccak256 hash of the claim code
-     */
-    function _hashClaimCode(
-        string memory _claimCode
-    ) internal pure returns (bytes32 result) {
-        bytes memory packed = abi.encodePacked(_claimCode);
-        assembly {
-            result := keccak256(add(packed, 0x20), mload(packed))
-        }
-    }
-
-    /**
      * @dev Prevents a contract from calling itself, directly or indirectly.
      */
     modifier nonReentrant() {
@@ -124,7 +110,7 @@ contract Gigipay is
     /**
      * @notice Create multiple payment vouchers under ONE voucher name (gas efficient!)
      * @param voucherName The shared name for all vouchers (e.g., "december2024")
-     * @param claimCodes Array of secret codes for each voucher
+     * @param claimCodeHashes Array of keccak256 hashes of the secret codes — hashed CLIENT-SIDE before sending
      * @param amounts Array of amounts for each voucher
      * @param expirationTimes Array of expiration timestamps for each voucher
      * @return voucherIds Array of created voucher IDs
@@ -132,11 +118,11 @@ contract Gigipay is
     function createVoucherBatch(
         address token,
         string memory voucherName,
-        string[] memory claimCodes,
+        bytes32[] memory claimCodeHashes,
         uint256[] memory amounts,
         uint256[] memory expirationTimes
     ) public payable whenNotPaused returns (uint256[] memory) {
-        uint256 length = claimCodes.length;
+        uint256 length = claimCodeHashes.length;
         if (length != amounts.length || length != expirationTimes.length) {
             revert InvalidAmount();
         }
@@ -171,16 +157,15 @@ contract Gigipay is
             if (amounts[i] == 0) revert InvalidAmount();
             if (expirationTimes[i] <= block.timestamp)
                 revert InvalidExpirationTime();
-            if (bytes(claimCodes[i]).length == 0) revert InvalidClaimCode();
+            if (claimCodeHashes[i] == bytes32(0)) revert InvalidClaimCode();
 
             uint256 voucherId = _voucherIdCounter++;
-            bytes32 claimCodeHash = _hashClaimCode(claimCodes[i]);
 
             vouchers[voucherId] = PaymentVoucher({
                 sender: msg.sender,
                 token: token,
                 amount: amounts[i],
-                claimCodeHash: claimCodeHash,
+                claimCodeHash: claimCodeHashes[i],
                 expiresAt: expirationTimes[i],
                 claimed: false,
                 refunded: false,
@@ -204,30 +189,29 @@ contract Gigipay is
     }
 
     /**
-     * @notice Claim a payment voucher using voucher name and claim code
+     * @notice Claim a payment voucher using voucher name and the hash of the claim code.
+     *         The plain-text code is hashed CLIENT-SIDE — it never appears on-chain.
      * @param voucherName The name of the voucher campaign (e.g., "Birthday2024")
-     * @param claimCode The secret code to unlock the voucher
+     * @param claimCodeHash keccak256(abi.encodePacked(claimCode)) — computed by the frontend
      */
     function claimVoucher(
         string memory voucherName,
-        string memory claimCode
+        bytes32 claimCodeHash
     ) public whenNotPaused {
         bytes32 voucherNameHash = keccak256(abi.encodePacked(voucherName));
         uint256[] memory voucherIds = voucherNameToIds[voucherNameHash];
 
         if (voucherIds.length == 0) revert VoucherNotFound();
 
-        bytes32 providedCodeHash = _hashClaimCode(claimCode);
-
-        // Find the voucher with matching claim code
+        // Find the voucher with matching claim code hash
         for (uint256 i = 0; i < voucherIds.length; i++) {
             PaymentVoucher storage voucher = vouchers[voucherIds[i]];
 
             // Skip if already claimed or refunded
             if (voucher.claimed || voucher.refunded) continue;
 
-            // Check if claim code matches
-            if (providedCodeHash == voucher.claimCodeHash) {
+            // Check if hash matches
+            if (claimCodeHash == voucher.claimCodeHash) {
                 // Check if expired
                 if (block.timestamp > voucher.expiresAt)
                     revert VoucherExpired();
@@ -237,13 +221,11 @@ contract Gigipay is
 
                 // Transfer funds based on token type
                 if (voucher.token == address(0)) {
-                    // Native token transfer
                     (bool success, ) = payable(msg.sender).call{
                         value: voucher.amount
                     }("");
                     if (!success) revert TransferFailed();
                 } else {
-                    // ERC20 token transfer
                     IERC20(voucher.token).safeTransfer(
                         msg.sender,
                         voucher.amount
@@ -255,7 +237,6 @@ contract Gigipay is
             }
         }
 
-        // If we get here, no matching unclaimed voucher was found
         revert InvalidClaimCode();
     }
 
