@@ -26,11 +26,11 @@ contract CodePaymentTest is Test, IGigipayEvents, IGigipayErrors {
     string constant CODE3 = "PROMO999";
     string constant WRONG_CODE = "WRONGCODE";
 
-    // Pre-computed hashes (what actually goes on-chain)
-    bytes32 constant HASH1 = keccak256(abi.encodePacked("SECRET123"));
-    bytes32 constant HASH2 = keccak256(abi.encodePacked("GIFT2024"));
-    bytes32 constant HASH3 = keccak256(abi.encodePacked("PROMO999"));
-    bytes32 constant WRONG_HASH = keccak256(abi.encodePacked("WRONGCODE"));
+    // Pre-computed hashes — keccak256(voucherName + claimCode), same as frontend
+    bytes32 constant HASH1 = keccak256(abi.encodePacked(VOUCHER1, "SECRET123"));
+    bytes32 constant HASH2 = keccak256(abi.encodePacked(VOUCHER1, "GIFT2024"));
+    bytes32 constant HASH3 = keccak256(abi.encodePacked(VOUCHER1, "PROMO999"));
+    bytes32 constant WRONG_HASH = keccak256(abi.encodePacked(VOUCHER1, "WRONGCODE"));
 
     string constant VOUCHER1 = "TestVoucher1";
     string constant VOUCHER2 = "TestVoucher2";

@@ -146,7 +146,6 @@ contract Gigipay is
             if (claimHashToVoucherId[claimCodeHashes[i]] != 0) revert DuplicateClaimCode();
             totalAmount += amounts[i];
         }
-
         // ── Collect payment ───────────────────────────────────────────────────
         if (token == address(0)) {
             if (msg.value != totalAmount) revert InvalidAmount();
