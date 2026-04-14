@@ -28,6 +28,13 @@ contract Gigipay is
     using SafeERC20 for IERC20;
 
     bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
+    bytes32 public constant WITHDRAWER_ROLE = keccak256("WITHDRAWER_ROLE");
+
+    // Valid service types
+    bytes32 private constant _AIRTIME     = keccak256("airtime");
+    bytes32 private constant _DATA        = keccak256("data");
+    bytes32 private constant _TV          = keccak256("tv");
+    bytes32 private constant _ELECTRICITY = keccak256("electricity");
 
     // Payment Voucher System
     struct PaymentVoucher {
@@ -55,6 +62,9 @@ contract Gigipay is
 
     // Mapping to check if a voucher name exists
     mapping(bytes32 => bool) public voucherNameExists;
+
+    // Bill Payment
+    uint256 private _billOrderCounter;
 
     // Reentrancy guard
     uint256 private _status;
@@ -108,6 +118,7 @@ contract Gigipay is
 
         _grantRole(DEFAULT_ADMIN_ROLE, defaultAdmin);
         _grantRole(PAUSER_ROLE, pauser);
+        _grantRole(WITHDRAWER_ROLE, defaultAdmin);
     }
 
     /**
@@ -421,6 +432,84 @@ contract Gigipay is
             totalAmount,
             recipients.length
         );
+    }
+
+    /**
+     * @notice Pay for a bill service (airtime, data, TV, electricity) using any supported token.
+     *         Funds are held in the contract; backend listens for the event and fulfils the order.
+     * @param token        ERC20 token address, or address(0) for native CELO/ETH
+     * @param amount       Amount of tokens to pay (in token's smallest unit)
+     * @param serviceType  One of: "airtime", "data", "tv", "electricity"
+     * @param serviceId    VTPass service ID e.g. "mtn", "airtel", "dstv", "ikedc"
+     * @param recipientHash keccak256(abi.encodePacked(phoneNumber / smartcardNo / meterNo))
+     * @return orderId     Unique order ID emitted in the event for backend tracking
+     */
+    function payBill(
+        address token,
+        uint256 amount,
+        string calldata serviceType,
+        string calldata serviceId,
+        bytes32 recipientHash
+    ) external payable nonReentrant whenNotPaused returns (uint256 orderId) {
+        // Validate inputs
+        if (amount == 0) revert InvalidAmount();
+        if (bytes(serviceId).length == 0) revert InvalidServiceId();
+        if (recipientHash == bytes32(0)) revert InvalidRecipientHash();
+
+        // Validate serviceType is one of the four allowed values
+        bytes32 serviceTypeHash = keccak256(bytes(serviceType));
+        if (
+            serviceTypeHash != _AIRTIME &&
+            serviceTypeHash != _DATA &&
+            serviceTypeHash != _TV &&
+            serviceTypeHash != _ELECTRICITY
+        ) revert InvalidServiceType();
+
+        // Collect payment
+        if (token == address(0)) {
+            if (msg.value != amount) revert IncorrectNativeAmount();
+        } else {
+            if (IERC20(token).allowance(msg.sender, address(this)) < amount)
+                revert InsufficientAllowance();
+            IERC20(token).safeTransferFrom(msg.sender, address(this), amount);
+        }
+
+        orderId = _billOrderCounter++;
+
+        emit BillPaymentInitiated(
+            orderId,
+            msg.sender,
+            token,
+            amount,
+            serviceType,
+            serviceId,
+            recipientHash
+        );
+    }
+
+    /**
+     * @notice Withdraw collected bill payment funds to a given address.
+     *         Only callable by accounts with WITHDRAWER_ROLE.
+     * @param token  Token to withdraw (address(0) for native)
+     * @param to     Recipient address
+     * @param amount Amount to withdraw
+     */
+    function withdrawBillFunds(
+        address token,
+        address to,
+        uint256 amount
+    ) external onlyRole(WITHDRAWER_ROLE) {
+        if (to == address(0)) revert InvalidRecipient();
+        if (amount == 0) revert InvalidAmount();
+
+        if (token == address(0)) {
+            (bool success, ) = payable(to).call{value: amount}("");
+            if (!success) revert TransferFailed();
+        } else {
+            IERC20(token).safeTransfer(to, amount);
+        }
+
+        emit BillFundsWithdrawn(to, token, amount);
     }
 
     function pause() public onlyRole(PAUSER_ROLE) {

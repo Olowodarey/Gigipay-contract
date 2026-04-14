@@ -48,4 +48,14 @@ interface IGigipayErrors {
     
     /// @notice Thrown when an invalid recipient address is provided
     error InvalidRecipient();
+
+    // Bill Payment Errors
+    /// @notice Thrown when an unsupported service type is provided
+    error InvalidServiceType();
+
+    /// @notice Thrown when serviceId is empty
+    error InvalidServiceId();
+
+    /// @notice Thrown when recipient hash is zero
+    error InvalidRecipientHash();
 }

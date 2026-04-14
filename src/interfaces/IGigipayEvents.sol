@@ -57,4 +57,36 @@ interface IGigipayEvents {
         uint256 totalAmount,
         uint256 recipientCount
     );
+
+    /**
+     * @notice Emitted when a bill payment is initiated (airtime, data, TV, electricity)
+     * @param orderId Unique order ID for this payment
+     * @param buyer The address that made the payment
+     * @param token The token used for payment (address(0) for native)
+     * @param amount The amount of tokens paid
+     * @param serviceType "airtime" | "data" | "tv" | "electricity"
+     * @param serviceId VTPass service identifier e.g. "mtn", "dstv", "ikedc"
+     * @param recipientHash keccak256 hash of the recipient identifier (phone/smartcard/meter)
+     */
+    event BillPaymentInitiated(
+        uint256 indexed orderId,
+        address indexed buyer,
+        address token,
+        uint256 amount,
+        string serviceType,
+        string serviceId,
+        bytes32 recipientHash
+    );
+
+    /**
+     * @notice Emitted when admin withdraws collected bill payment funds
+     * @param to Recipient of the withdrawal
+     * @param token Token withdrawn (address(0) for native)
+     * @param amount Amount withdrawn
+     */
+    event BillFundsWithdrawn(
+        address indexed to,
+        address indexed token,
+        uint256 amount
+    );
 }
