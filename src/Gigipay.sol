@@ -124,7 +124,7 @@ contract Gigipay is
         bytes32[] memory claimCodeHashes,
         uint256[] memory amounts,
         uint256[] memory expirationTimes
-    ) public payable whenNotPaused returns (uint256[] memory) {
+    ) public payable nonReentrant whenNotPaused returns (uint256[] memory) {
         uint256 length = claimCodeHashes.length;
         if (length != amounts.length || length != expirationTimes.length) {
             revert InvalidAmount();
@@ -242,7 +242,7 @@ contract Gigipay is
      */
     function refundVouchersByName(
         string memory voucherName
-    ) public whenNotPaused returns (uint256) {
+    ) public nonReentrant whenNotPaused returns (uint256) {
         bytes32 voucherNameHash = keccak256(abi.encodePacked(voucherName));
         uint256[] memory voucherIds = voucherNameToIds[voucherNameHash];
 
@@ -253,29 +253,22 @@ contract Gigipay is
         address tokenToRefund = address(0);
         bool isFirstRefund = true;
 
-        // Loop through all vouchers under this name
+        // ── Effects: mark all eligible vouchers as refunded first ────────────
         for (uint256 i = 0; i < voucherIds.length; i++) {
             PaymentVoucher storage voucher = vouchers[voucherIds[i]];
 
-            // Skip if already claimed or refunded
             if (voucher.claimed || voucher.refunded) continue;
-
-            // Skip if not expired yet
             if (block.timestamp <= voucher.expiresAt) continue;
-
-            // Only the original sender can refund
             if (msg.sender != voucher.sender) continue;
 
-            // Store token type from first refundable voucher
             if (isFirstRefund) {
                 tokenToRefund = voucher.token;
                 isFirstRefund = false;
             }
 
-            // All vouchers under same name should use same token
             if (voucher.token != tokenToRefund) continue;
 
-            // Mark as refunded
+            // State change BEFORE any transfer
             voucher.refunded = true;
             totalRefundAmount += voucher.amount;
             refundedCount++;
@@ -283,18 +276,13 @@ contract Gigipay is
             emit VoucherRefunded(voucherIds[i], voucher.sender, voucher.amount);
         }
 
-        // Revert if no vouchers were refunded
-        if (refundedCount == 0) revert VoucherNotExpired(); // No refundable vouchers found
+        if (refundedCount == 0) revert VoucherNotExpired();
 
-        // Transfer total refund amount based on token type
+        // ── Interactions: single transfer after all state is updated ─────────
         if (tokenToRefund == address(0)) {
-            // Native token refund
-            (bool success, ) = payable(msg.sender).call{
-                value: totalRefundAmount
-            }("");
+            (bool success, ) = payable(msg.sender).call{value: totalRefundAmount}("");
             if (!success) revert TransferFailed();
         } else {
-            // ERC20 token refund
             IERC20(tokenToRefund).safeTransfer(msg.sender, totalRefundAmount);
         }
 
@@ -474,9 +462,12 @@ contract Gigipay is
         address token,
         address to,
         uint256 amount
-    ) external onlyRole(WITHDRAWER_ROLE) {
+    ) external nonReentrant onlyRole(WITHDRAWER_ROLE) {
         if (to == address(0)) revert InvalidRecipient();
         if (amount == 0) revert InvalidAmount();
+
+        // Emit before transfer — state is already updated by the role check
+        emit BillFundsWithdrawn(to, token, amount);
 
         if (token == address(0)) {
             (bool success, ) = payable(to).call{value: amount}("");
@@ -484,8 +475,6 @@ contract Gigipay is
         } else {
             IERC20(token).safeTransfer(to, amount);
         }
-
-        emit BillFundsWithdrawn(to, token, amount);
     }
 
     function pause() public onlyRole(PAUSER_ROLE) {
