@@ -30,6 +30,9 @@ contract Gigipay is
     bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
     bytes32 public constant WITHDRAWER_ROLE = keccak256("WITHDRAWER_ROLE");
 
+    // Max items per batch call — prevents block gas limit DoS
+    uint256 public constant MAX_BATCH_SIZE = 200;
+
     // Valid service types
     bytes32 private constant _AIRTIME     = keccak256("airtime");
     bytes32 private constant _DATA        = keccak256("data");
@@ -89,7 +92,7 @@ contract Gigipay is
     }
 
     function _nonReentrantBefore() internal {
-        if (_status == _ENTERED) revert TransferFailed(); // Reusing error for reentrancy
+        if (_status == _ENTERED) revert ReentrantCall();
         _status = _ENTERED;
     }
 
@@ -126,42 +129,38 @@ contract Gigipay is
         uint256[] memory expirationTimes
     ) public payable nonReentrant whenNotPaused returns (uint256[] memory) {
         uint256 length = claimCodeHashes.length;
-        if (length != amounts.length || length != expirationTimes.length) {
+
+        // ── Input validation (all checks before any state change or transfer) ─
+        if (length == 0) revert EmptyArray();
+        if (length > MAX_BATCH_SIZE) revert BatchTooLarge();
+        if (length != amounts.length || length != expirationTimes.length)
             revert InvalidAmount();
-        }
         if (bytes(voucherName).length == 0) revert InvalidClaimCode();
 
         uint256 totalAmount = 0;
         for (uint256 i = 0; i < length; i++) {
+            if (amounts[i] == 0) revert InvalidAmount();
+            if (expirationTimes[i] <= block.timestamp) revert InvalidExpirationTime();
+            if (claimCodeHashes[i] == bytes32(0)) revert InvalidClaimCode();
+            // Prevent duplicate hashes — would silently overwrite claimHashToVoucherId
+            if (claimHashToVoucherId[claimCodeHashes[i]] != 0) revert DuplicateClaimCode();
             totalAmount += amounts[i];
         }
 
+        // ── Collect payment ───────────────────────────────────────────────────
         if (token == address(0)) {
             if (msg.value != totalAmount) revert InvalidAmount();
         } else {
-            IERC20 tokenContract = IERC20(token);
-            if (
-                tokenContract.allowance(msg.sender, address(this)) < totalAmount
-            ) {
+            if (IERC20(token).allowance(msg.sender, address(this)) < totalAmount)
                 revert InsufficientAllowance();
-            }
-
-            tokenContract.safeTransferFrom(
-                msg.sender,
-                address(this),
-                totalAmount
-            );
+            IERC20(token).safeTransferFrom(msg.sender, address(this), totalAmount);
         }
 
+        // ── Write state ───────────────────────────────────────────────────────
         bytes32 voucherNameHash = keccak256(abi.encodePacked(voucherName));
         uint256[] memory voucherIds = new uint256[](length);
 
         for (uint256 i = 0; i < length; i++) {
-            if (amounts[i] == 0) revert InvalidAmount();
-            if (expirationTimes[i] <= block.timestamp)
-                revert InvalidExpirationTime();
-            if (claimCodeHashes[i] == bytes32(0)) revert InvalidClaimCode();
-
             uint256 voucherId = _voucherIdCounter++;
 
             vouchers[voucherId] = PaymentVoucher({
@@ -177,16 +176,10 @@ contract Gigipay is
 
             senderVouchers[msg.sender].push(voucherId);
             voucherNameToIds[voucherNameHash].push(voucherId);
-            // Store voucherId + 1 so 0 means "not registered"
             claimHashToVoucherId[claimCodeHashes[i]] = voucherId + 1;
             voucherIds[i] = voucherId;
 
-            emit VoucherCreated(
-                voucherId,
-                msg.sender,
-                amounts[i],
-                expirationTimes[i]
-            );
+            emit VoucherCreated(voucherId, msg.sender, amounts[i], expirationTimes[i]);
         }
 
         voucherNameExists[voucherNameHash] = true;
@@ -194,35 +187,25 @@ contract Gigipay is
     }
 
     /**
-     * @notice Claim a payment voucher using voucher name and the hash of the claim code.
+     * @notice Claim a payment voucher using the hash of the claim code.
      *         The plain-text code is hashed CLIENT-SIDE — it never appears on-chain.
-     * @param voucherName The name of the voucher campaign (e.g., "Birthday2024")
      * @param claimCodeHash keccak256(abi.encodePacked(claimCode)) — computed by the frontend
      */
     function claimVoucher(
-        string memory voucherName,
         bytes32 claimCodeHash
     ) public nonReentrant whenNotPaused {
-        // O(1) direct lookup — no loop, no gas scaling with voucher count
-        // Stored as voucherId + 1, so 0 means hash was never registered
+        // O(1) direct lookup — stored as voucherId + 1, so 0 means not registered
         uint256 stored = claimHashToVoucherId[claimCodeHash];
         if (stored == 0) revert InvalidClaimCode();
         uint256 voucherId = stored - 1;
 
         PaymentVoucher storage voucher = vouchers[voucherId];
 
-        // Verify the voucher exists and belongs to this campaign
         if (voucher.sender == address(0)) revert VoucherNotFound();
-
-        // Verify the voucher name matches (prevents cross-campaign hash collisions)
-        bytes32 voucherNameHash = keccak256(abi.encodePacked(voucherName));
-        if (keccak256(abi.encodePacked(voucher.voucherName)) != voucherNameHash)
-            revert VoucherNotFound();
-
         if (voucher.claimed || voucher.refunded) revert VoucherAlreadyClaimed();
         if (block.timestamp > voucher.expiresAt) revert VoucherExpired();
 
-        // Mark claimed BEFORE transfer (checks-effects-interactions)
+        // Effects before interactions
         voucher.claimed = true;
 
         if (voucher.token == address(0)) {
@@ -353,6 +336,7 @@ contract Gigipay is
     ) external payable nonReentrant whenNotPaused {
         if (recipients.length != amounts.length) revert LengthMismatch();
         if (recipients.length == 0) revert EmptyArray();
+        if (recipients.length > MAX_BATCH_SIZE) revert BatchTooLarge();
 
         uint256 totalAmount = 0;
         for (uint256 i = 0; i < amounts.length; i++) {
@@ -466,15 +450,34 @@ contract Gigipay is
         if (to == address(0)) revert InvalidRecipient();
         if (amount == 0) revert InvalidAmount();
 
-        // Emit before transfer — state is already updated by the role check
-        emit BillFundsWithdrawn(to, token, amount);
-
         if (token == address(0)) {
+            if (address(this).balance < amount) revert InsufficientContractBalance();
+            emit BillFundsWithdrawn(to, token, amount);
             (bool success, ) = payable(to).call{value: amount}("");
             if (!success) revert TransferFailed();
         } else {
+            if (IERC20(token).balanceOf(address(this)) < amount)
+                revert InsufficientContractBalance();
+            emit BillFundsWithdrawn(to, token, amount);
             IERC20(token).safeTransfer(to, amount);
         }
+    }
+
+    /**
+     * @notice Recover native tokens accidentally sent directly to the contract
+     *         (not via payBill or createVoucherBatch).
+     *         Only callable by WITHDRAWER_ROLE.
+     */
+    function recoverNative(address to, uint256 amount)
+        external
+        nonReentrant
+        onlyRole(WITHDRAWER_ROLE)
+    {
+        if (to == address(0)) revert InvalidRecipient();
+        if (amount == 0) revert InvalidAmount();
+        if (address(this).balance < amount) revert InsufficientContractBalance();
+        (bool success, ) = payable(to).call{value: amount}("");
+        if (!success) revert TransferFailed();
     }
 
     function pause() public onlyRole(PAUSER_ROLE) {

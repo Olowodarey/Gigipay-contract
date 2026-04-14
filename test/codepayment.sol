@@ -151,7 +151,7 @@ contract CodePaymentTest is Test, IGigipayEvents, IGigipayErrors {
 
         // Claimer passes the hash of their code — plain text never on-chain
         vm.prank(claimer1);
-        gigipay.claimVoucher(VOUCHER1, HASH1);
+        gigipay.claimVoucher(HASH1);
 
         assertEq(claimer1.balance - claimerBalanceBefore, amount);
         (, , , , , bool claimed, , ) = gigipay.vouchers(voucherId);
@@ -175,7 +175,7 @@ contract CodePaymentTest is Test, IGigipayEvents, IGigipayErrors {
 
         vm.prank(claimer1);
         vm.expectRevert(InvalidClaimCode.selector);
-        gigipay.claimVoucher(VOUCHER1, WRONG_HASH);
+        gigipay.claimVoucher(WRONG_HASH);
     }
 
     function test_RefundExpiredVoucher() public {

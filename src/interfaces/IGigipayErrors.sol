@@ -58,4 +58,16 @@ interface IGigipayErrors {
 
     /// @notice Thrown when recipient hash is zero
     error InvalidRecipientHash();
+
+    /// @notice Thrown when a reentrancy attack is detected
+    error ReentrantCall();
+
+    /// @notice Thrown when a duplicate claim code hash is provided
+    error DuplicateClaimCode();
+
+    /// @notice Thrown when too many items are provided in a single call
+    error BatchTooLarge();
+
+    /// @notice Thrown when contract has insufficient balance for withdrawal
+    error InsufficientContractBalance();
 }
