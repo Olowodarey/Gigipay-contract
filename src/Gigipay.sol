@@ -63,6 +63,9 @@ contract Gigipay is
     // Mapping to check if a voucher name exists
     mapping(bytes32 => bool) public voucherNameExists;
 
+    // Direct lookup: claimCodeHash => voucherId + 1 (0 means not registered)
+    mapping(bytes32 => uint256) public claimHashToVoucherId;
+
     // Bill Payment
     uint256 private _billOrderCounter;
 
@@ -174,6 +177,8 @@ contract Gigipay is
 
             senderVouchers[msg.sender].push(voucherId);
             voucherNameToIds[voucherNameHash].push(voucherId);
+            // Store voucherId + 1 so 0 means "not registered"
+            claimHashToVoucherId[claimCodeHashes[i]] = voucherId + 1;
             voucherIds[i] = voucherId;
 
             emit VoucherCreated(
@@ -197,47 +202,37 @@ contract Gigipay is
     function claimVoucher(
         string memory voucherName,
         bytes32 claimCodeHash
-    ) public whenNotPaused {
+    ) public nonReentrant whenNotPaused {
+        // O(1) direct lookup — no loop, no gas scaling with voucher count
+        // Stored as voucherId + 1, so 0 means hash was never registered
+        uint256 stored = claimHashToVoucherId[claimCodeHash];
+        if (stored == 0) revert InvalidClaimCode();
+        uint256 voucherId = stored - 1;
+
+        PaymentVoucher storage voucher = vouchers[voucherId];
+
+        // Verify the voucher exists and belongs to this campaign
+        if (voucher.sender == address(0)) revert VoucherNotFound();
+
+        // Verify the voucher name matches (prevents cross-campaign hash collisions)
         bytes32 voucherNameHash = keccak256(abi.encodePacked(voucherName));
-        uint256[] memory voucherIds = voucherNameToIds[voucherNameHash];
+        if (keccak256(abi.encodePacked(voucher.voucherName)) != voucherNameHash)
+            revert VoucherNotFound();
 
-        if (voucherIds.length == 0) revert VoucherNotFound();
+        if (voucher.claimed || voucher.refunded) revert VoucherAlreadyClaimed();
+        if (block.timestamp > voucher.expiresAt) revert VoucherExpired();
 
-        // Find the voucher with matching claim code hash
-        for (uint256 i = 0; i < voucherIds.length; i++) {
-            PaymentVoucher storage voucher = vouchers[voucherIds[i]];
+        // Mark claimed BEFORE transfer (checks-effects-interactions)
+        voucher.claimed = true;
 
-            // Skip if already claimed or refunded
-            if (voucher.claimed || voucher.refunded) continue;
-
-            // Check if hash matches
-            if (claimCodeHash == voucher.claimCodeHash) {
-                // Check if expired
-                if (block.timestamp > voucher.expiresAt)
-                    revert VoucherExpired();
-
-                // Mark as claimed
-                voucher.claimed = true;
-
-                // Transfer funds based on token type
-                if (voucher.token == address(0)) {
-                    (bool success, ) = payable(msg.sender).call{
-                        value: voucher.amount
-                    }("");
-                    if (!success) revert TransferFailed();
-                } else {
-                    IERC20(voucher.token).safeTransfer(
-                        msg.sender,
-                        voucher.amount
-                    );
-                }
-
-                emit VoucherClaimed(voucherIds[i], msg.sender, voucher.amount);
-                return;
-            }
+        if (voucher.token == address(0)) {
+            (bool success, ) = payable(msg.sender).call{value: voucher.amount}("");
+            if (!success) revert TransferFailed();
+        } else {
+            IERC20(voucher.token).safeTransfer(msg.sender, voucher.amount);
         }
 
-        revert InvalidClaimCode();
+        emit VoucherClaimed(voucherId, msg.sender, voucher.amount);
     }
 
     /**
