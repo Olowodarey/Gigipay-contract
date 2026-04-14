@@ -178,6 +178,57 @@ contract CodePaymentTest is Test, IGigipayEvents, IGigipayErrors {
         gigipay.claimVoucher(WRONG_HASH);
     }
 
+    function test_SameCodeDifferentCampaignsNoCollision() public {
+        // Two senders use the same plain-text code "happybirthday" in different campaigns
+        address sender2 = makeAddr("sender2");
+        vm.deal(sender2, 10 ether);
+
+        // Hash is scoped: keccak256(voucherName + code)
+        bytes32 hash_alice = keccak256(abi.encodePacked("AliceBirthday", "happybirthday"));
+        bytes32 hash_bob   = keccak256(abi.encodePacked("BobBirthday",   "happybirthday"));
+
+        // They must be different
+        assertTrue(hash_alice != hash_bob, "Hashes must differ across campaigns");
+
+        bytes32[] memory hashes1 = new bytes32[](1);
+        hashes1[0] = hash_alice;
+        uint256[] memory amounts1 = new uint256[](1);
+        amounts1[0] = 1 ether;
+        uint256[] memory exp1 = new uint256[](1);
+        exp1[0] = block.timestamp + 1 days;
+
+        bytes32[] memory hashes2 = new bytes32[](1);
+        hashes2[0] = hash_bob;
+        uint256[] memory amounts2 = new uint256[](1);
+        amounts2[0] = 2 ether;
+        uint256[] memory exp2 = new uint256[](1);
+        exp2[0] = block.timestamp + 1 days;
+
+        // Both can be created without collision
+        vm.prank(sender);
+        gigipay.createVoucherBatch{value: 1 ether}(
+            NATIVE_TOKEN, "AliceBirthday", hashes1, amounts1, exp1
+        );
+        vm.prank(sender2);
+        gigipay.createVoucherBatch{value: 2 ether}(
+            NATIVE_TOKEN, "BobBirthday", hashes2, amounts2, exp2
+        );
+
+        // claimer1 claims Alice's voucher — gets 1 ether
+        uint256 before = claimer1.balance;
+        vm.prank(claimer1);
+        gigipay.claimVoucher(hash_alice);
+        assertEq(claimer1.balance - before, 1 ether, "Should get Alice's amount");
+
+        // claimer2 claims Bob's voucher — gets 2 ether
+        address claimerB = makeAddr("claimerB");
+        vm.prank(claimerB);
+        gigipay.claimVoucher(hash_bob);
+        assertEq(claimerB.balance, 2 ether, "Should get Bob's amount");
+
+        console.log("[SUCCESS] Same code word in different campaigns - no collision");
+    }
+
     function test_RefundExpiredVoucher() public {
         uint256 amount = 2 ether;
         uint256 expiresAt = block.timestamp + 1 hours;
