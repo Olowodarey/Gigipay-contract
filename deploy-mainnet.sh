@@ -69,14 +69,14 @@ if [ -z "$ETHERSCAN_API_KEY" ]; then
     echo "⚠️  Warning: ETHERSCAN_API_KEY not set - contract verification will be skipped"
     echo "   You can verify manually later on Celoscan"
     forge script script/DeployGigipay.s.sol:DeployGigipay \
-      --rpc-url https://forno.celo.org \
+      --rpc-url ${CELO_RPC_URL:-https://rpc.ankr.com/celo} \
       --private-key $PRIVATE_KEY \
       --broadcast \
       -vvvv
 else
     echo "✅ ETHERSCAN_API_KEY found - will attempt automatic verification"
     forge script script/DeployGigipay.s.sol:DeployGigipay \
-      --rpc-url https://forno.celo.org \
+      --rpc-url ${CELO_RPC_URL:-https://rpc.ankr.com/celo} \
       --private-key $PRIVATE_KEY \
       --broadcast \
       --verify \
