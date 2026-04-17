@@ -89,4 +89,14 @@ interface IGigipayEvents {
         address indexed token,
         uint256 amount
     );
+
+    /**
+     * @notice Emitted when native tokens are recovered from the contract
+     * @param to Recipient of the recovered funds
+     * @param amount Amount recovered
+     */
+    event NativeRecovered(
+        address indexed to,
+        uint256 amount
+    );
 }

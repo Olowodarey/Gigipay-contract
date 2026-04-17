@@ -475,6 +475,7 @@ contract Gigipay is
         if (to == address(0)) revert InvalidRecipient();
         if (amount == 0) revert InvalidAmount();
         if (address(this).balance < amount) revert InsufficientContractBalance();
+        emit NativeRecovered(to, amount);
         (bool success, ) = payable(to).call{value: amount}("");
         if (!success) revert TransferFailed();
     }
