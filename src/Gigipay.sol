@@ -11,6 +11,9 @@ import {
 import {
     PausableUpgradeable
 } from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
+import {
+    UUPSUpgradeable
+} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {
     SafeERC20
@@ -22,6 +25,7 @@ contract Gigipay is
     Initializable,
     PausableUpgradeable,
     AccessControlUpgradeable,
+    UUPSUpgradeable,
     IGigipayErrors,
     IGigipayEvents
 {
@@ -71,6 +75,10 @@ contract Gigipay is
 
     // Bill Payment
     uint256 private _billOrderCounter;
+
+    // Fund accounting: track locked voucher funds separately per token
+    // token address => total amount locked in vouchers
+    mapping(address => uint256) public lockedVoucherFunds;
 
     // Reentrancy guard
     uint256 private _status;
@@ -159,6 +167,9 @@ contract Gigipay is
         bytes32 voucherNameHash = keccak256(abi.encodePacked(voucherName));
         uint256[] memory voucherIds = new uint256[](length);
 
+        // Lock the total amount in voucher accounting
+        lockedVoucherFunds[token] += totalAmount;
+
         for (uint256 i = 0; i < length; i++) {
             uint256 voucherId = _voucherIdCounter++;
 
@@ -206,6 +217,9 @@ contract Gigipay is
 
         // Effects before interactions
         voucher.claimed = true;
+
+        // Unlock funds from voucher accounting
+        lockedVoucherFunds[voucher.token] -= voucher.amount;
 
         if (voucher.token == address(0)) {
             (bool success, ) = payable(msg.sender).call{value: voucher.amount}("");
@@ -259,6 +273,9 @@ contract Gigipay is
         }
 
         if (refundedCount == 0) revert VoucherNotExpired();
+
+        // Unlock the refunded amount from voucher accounting
+        lockedVoucherFunds[tokenToRefund] -= totalRefundAmount;
 
         // ── Interactions: single transfer after all state is updated ─────────
         if (tokenToRefund == address(0)) {
@@ -437,6 +454,7 @@ contract Gigipay is
     /**
      * @notice Withdraw collected bill payment funds to a given address.
      *         Only callable by accounts with WITHDRAWER_ROLE.
+     *         IMPORTANT: This only withdraws bill payment funds, NOT voucher funds.
      * @param token  Token to withdraw (address(0) for native)
      * @param to     Recipient address
      * @param amount Amount to withdraw
@@ -449,16 +467,33 @@ contract Gigipay is
         if (to == address(0)) revert InvalidRecipient();
         if (amount == 0) revert InvalidAmount();
 
+        uint256 availableBalance;
         if (token == address(0)) {
-            if (address(this).balance < amount) revert InsufficientContractBalance();
+            // Available = total balance - locked voucher funds
+            availableBalance = address(this).balance - lockedVoucherFunds[token];
+            if (availableBalance < amount) revert InsufficientContractBalance();
             emit BillFundsWithdrawn(to, token, amount);
             (bool success, ) = payable(to).call{value: amount}("");
             if (!success) revert TransferFailed();
         } else {
-            if (IERC20(token).balanceOf(address(this)) < amount)
-                revert InsufficientContractBalance();
+            // Available = total token balance - locked voucher funds
+            availableBalance = IERC20(token).balanceOf(address(this)) - lockedVoucherFunds[token];
+            if (availableBalance < amount) revert InsufficientContractBalance();
             emit BillFundsWithdrawn(to, token, amount);
             IERC20(token).safeTransfer(to, amount);
+        }
+    }
+
+    /**
+     * @notice Get the available balance for bill fund withdrawals (excludes locked voucher funds)
+     * @param token Token address (address(0) for native)
+     * @return Available balance that can be withdrawn via withdrawBillFunds
+     */
+    function getAvailableBillFunds(address token) public view returns (uint256) {
+        if (token == address(0)) {
+            return address(this).balance - lockedVoucherFunds[token];
+        } else {
+            return IERC20(token).balanceOf(address(this)) - lockedVoucherFunds[token];
         }
     }
 
@@ -466,6 +501,7 @@ contract Gigipay is
      * @notice Recover native tokens accidentally sent directly to the contract
      *         (not via payBill or createVoucherBatch).
      *         Only callable by WITHDRAWER_ROLE.
+     *         IMPORTANT: Cannot withdraw locked voucher funds.
      */
     function recoverNative(address to, uint256 amount)
         external
@@ -474,7 +510,10 @@ contract Gigipay is
     {
         if (to == address(0)) revert InvalidRecipient();
         if (amount == 0) revert InvalidAmount();
-        if (address(this).balance < amount) revert InsufficientContractBalance();
+        
+        uint256 availableBalance = address(this).balance - lockedVoucherFunds[address(0)];
+        if (availableBalance < amount) revert InsufficientContractBalance();
+        
         emit NativeRecovered(to, amount);
         (bool success, ) = payable(to).call{value: amount}("");
         if (!success) revert TransferFailed();
@@ -487,6 +526,17 @@ contract Gigipay is
     function unpause() public onlyRole(PAUSER_ROLE) {
         _unpause();
     }
+
+    /**
+     * @dev Function that should revert when `msg.sender` is not authorized to upgrade the contract.
+     *      Called by {upgradeToAndCall}.
+     *      Only accounts with DEFAULT_ADMIN_ROLE can upgrade.
+     */
+    function _authorizeUpgrade(address newImplementation)
+        internal
+        override
+        onlyRole(DEFAULT_ADMIN_ROLE)
+    {}
 
     /**
      * @dev Allow contract to receive native tokens (ETH/CELO)
