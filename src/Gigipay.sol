@@ -452,6 +452,84 @@ contract Gigipay is
     }
 
     /**
+     * @notice Batch pay for bill services (perfect for airtime giveaways!)
+     *         Buy airtime/data for multiple recipients in ONE transaction.
+     * @param token         ERC20 token address, or address(0) for native CELO/ETH
+     * @param amounts       Array of amounts for each recipient
+     * @param serviceType   One of: "airtime", "data", "tv", "electricity" (same for all)
+     * @param serviceId     VTPass service ID e.g. "mtn", "airtel" (same for all)
+     * @param recipientHashes Array of keccak256(abi.encodePacked(phoneNumber)) for each recipient
+     * @return orderIds     Array of unique order IDs for backend tracking
+     */
+    function payBillBatch(
+        address token,
+        uint256[] calldata amounts,
+        string calldata serviceType,
+        string calldata serviceId,
+        bytes32[] calldata recipientHashes
+    ) external payable nonReentrant whenNotPaused returns (uint256[] memory orderIds) {
+        // ── Input validation ──────────────────────────────────────────────────
+        if (amounts.length == 0) revert EmptyArray();
+        if (amounts.length > MAX_BATCH_SIZE) revert BatchTooLarge();
+        if (amounts.length != recipientHashes.length) revert LengthMismatch();
+        if (bytes(serviceId).length == 0) revert InvalidServiceId();
+
+        // Validate serviceType once
+        {
+            bytes32 serviceTypeHash = keccak256(bytes(serviceType));
+            if (
+                serviceTypeHash != _AIRTIME &&
+                serviceTypeHash != _DATA &&
+                serviceTypeHash != _TV &&
+                serviceTypeHash != _ELECTRICITY
+            ) revert InvalidServiceType();
+        }
+
+        // Calculate total and validate
+        uint256 totalAmount;
+        {
+            for (uint256 i = 0; i < amounts.length; i++) {
+                if (amounts[i] == 0) revert InvalidAmount();
+                if (recipientHashes[i] == bytes32(0)) revert InvalidRecipientHash();
+                totalAmount += amounts[i];
+            }
+        }
+
+        // ── Collect payment ───────────────────────────────────────────────────
+        if (token == address(0)) {
+            if (msg.value != totalAmount) revert IncorrectNativeAmount();
+        } else {
+            if (IERC20(token).allowance(msg.sender, address(this)) < totalAmount)
+                revert InsufficientAllowance();
+            IERC20(token).safeTransferFrom(msg.sender, address(this), totalAmount);
+        }
+
+        // ── Emit events for each order ────────────────────────────────────────
+        orderIds = new uint256[](amounts.length);
+        for (uint256 i = 0; i < amounts.length; i++) {
+            orderIds[i] = _billOrderCounter++;
+
+            emit BillPaymentInitiated(
+                orderIds[i],
+                msg.sender,
+                token,
+                amounts[i],
+                serviceType,
+                serviceId,
+                recipientHashes[i]
+            );
+        }
+
+        emit BatchBillPaymentCompleted(
+            msg.sender,
+            token,
+            totalAmount,
+            serviceType,
+            amounts.length
+        );
+    }
+
+    /**
      * @notice Withdraw collected bill payment funds to a given address.
      *         Only callable by accounts with WITHDRAWER_ROLE.
      *         IMPORTANT: This only withdraws bill payment funds, NOT voucher funds.

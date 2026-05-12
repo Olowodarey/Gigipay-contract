@@ -99,4 +99,20 @@ interface IGigipayEvents {
         address indexed to,
         uint256 amount
     );
+
+    /**
+     * @notice Emitted when a batch bill payment is completed
+     * @param buyer The address that made the batch payment
+     * @param token The token used for payment (address(0) for native)
+     * @param totalAmount The total amount of tokens paid
+     * @param serviceType "airtime" | "data" | "tv" | "electricity"
+     * @param recipientCount The number of recipients
+     */
+    event BatchBillPaymentCompleted(
+        address indexed buyer,
+        address indexed token,
+        uint256 totalAmount,
+        string serviceType,
+        uint256 recipientCount
+    );
 }
