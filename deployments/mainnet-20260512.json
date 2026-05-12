@@ -1,0 +1,32 @@
+{
+  "network": "celo-mainnet",
+  "chainId": 42220,
+  "timestamp": "2026-05-12T00:00:00Z",
+  "deployer": "0xAB26c86b78DEDb488Bf0cb4FaCe11b048DDeFE5b",
+  "contracts": {
+    "implementation": "0xC7E30700e30852AF8d634BCCD92Def38758F99c0",
+    "proxy": "0x4e83B060F788413e97ad0Dd5FC9FC8781CC95cDc"
+  },
+  "roles": {
+    "defaultAdmin": "0xAB26c86b78DEDb488Bf0cb4FaCe11b048DDeFE5b",
+    "pauser": "0xAB26c86b78DEDb488Bf0cb4FaCe11b048DDeFE5b",
+    "withdrawer": "0xAB26c86b78DEDb488Bf0cb4FaCe11b048DDeFE5b"
+  },
+  "explorer": {
+    "implementation": "https://explorer.celo.org/mainnet/address/0xC7E30700e30852AF8d634BCCD92Def38758F99c0",
+    "proxy": "https://explorer.celo.org/mainnet/address/0x4e83B060F788413e97ad0Dd5FC9FC8781CC95cDc"
+  },
+  "gasUsed": {
+    "total": 7248839,
+    "cost": "2.899543573693904644 CELO"
+  },
+  "features": [
+    "Voucher System",
+    "Bill Payments (Airtime, Data, TV, Electricity)",
+    "Batch Bill Payments (up to 200 recipients)",
+    "Withdrawal Protection",
+    "UUPS Upgradeable",
+    "Access Control (RBAC)",
+    "Emergency Pause"
+  ]
+}

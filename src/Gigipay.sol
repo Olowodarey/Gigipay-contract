@@ -76,14 +76,15 @@ contract Gigipay is
     // Bill Payment
     uint256 private _billOrderCounter;
 
-    // Fund accounting: track locked voucher funds separately per token
-    // token address => total amount locked in vouchers
-    mapping(address => uint256) public lockedVoucherFunds;
-
     // Reentrancy guard
     uint256 private _status;
     uint256 private constant _NOT_ENTERED = 1;
     uint256 private constant _ENTERED = 2;
+
+    // Fund accounting: track locked voucher funds separately per token
+    // token address => total amount locked in vouchers
+    // NOTE: Added at the END to maintain storage layout compatibility for upgrades
+    mapping(address => uint256) public lockedVoucherFunds;
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
